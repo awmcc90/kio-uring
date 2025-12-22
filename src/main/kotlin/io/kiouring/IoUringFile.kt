@@ -34,7 +34,7 @@ class IoUringFile private constructor(
         return ioUringIoHandle.readvAsync(iovArray, offset)
             .whenComplete { res: Int, t: Throwable? ->
                 iovArray.release()
-                if (t == null) progressReadBuffer(buffers, res)
+                if (t == null) progressBuffers(buffers, res, isRead = true)
                 buffers.forEach { it.release() }
             }
     }
@@ -53,7 +53,7 @@ class IoUringFile private constructor(
         return ioUringIoHandle.writevAsync(iovArray, offset)
             .whenComplete { res: Int, t: Throwable? ->
                 iovArray.release()
-                if (t == null) progressWriteBuffer(buffers, res)
+                if (t == null) progressBuffers(buffers, res, isRead = false)
                 buffers.forEach { it.release() }
             }
     }
@@ -79,24 +79,20 @@ class IoUringFile private constructor(
         return iov
     }
 
-    private fun progressReadBuffer(buffers: Array<out ByteBuf>, syscallResult: Int) {
+    private fun progressBuffers(buffers: Array<out ByteBuf>, syscallResult: Int, isRead: Boolean) {
         var remaining = syscallResult
         val iterator = buffers.iterator()
         while (iterator.hasNext() && remaining > 0) {
             val buf = iterator.next()
-            val progress = buf.writableBytes().coerceAtMost(remaining)
-            buf.writerIndex(buf.writerIndex() + progress)
-            remaining -= progress
-        }
-    }
-
-    private fun progressWriteBuffer(buffers: Array<out ByteBuf>, syscallResult: Int) {
-        var remaining = syscallResult
-        val iterator = buffers.iterator()
-        while (iterator.hasNext() && remaining > 0) {
-            val buf = iterator.next()
-            val progress = buf.readableBytes().coerceAtMost(remaining)
-            buf.readerIndex(buf.readerIndex() + progress)
+            val progress = if (isRead) {
+                buf.writableBytes().coerceAtMost(remaining).also {
+                    buf.writerIndex(buf.writerIndex() + it)
+                }
+            } else {
+                buf.readableBytes().coerceAtMost(remaining).also {
+                    buf.readerIndex(buf.readerIndex() + it)
+                }
+            }
             remaining -= progress
         }
     }
