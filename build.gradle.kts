@@ -26,11 +26,11 @@ dependencies {
     implementation("org.apache.logging.log4j:log4j-api:2.25.3")
     implementation("org.apache.logging.log4j:log4j-api-kotlin:1.5.0")
 
-    testImplementation(kotlin("test"))
+    runtimeOnly("org.apache.logging.log4j:log4j-core:2.25.3")
+    runtimeOnly("org.apache.logging.log4j:log4j-slf4j2-impl:2.25.3")
+    runtimeOnly("com.lmax:disruptor:4.0.0")
 
-    jmhImplementation("org.apache.logging.log4j:log4j-core:2.25.3")
-    jmhImplementation("org.apache.logging.log4j:log4j-slf4j2-impl:2.25.3")
-    jmhImplementation("com.lmax:disruptor:4.0.0")
+    testImplementation(kotlin("test"))
 }
 
 jmh {
@@ -46,13 +46,14 @@ jmh {
         "-Dio.netty.tryReflectionSetAccessible=true",
         "-Dio.netty.iouring.ringSize=4096",
         "-Dio.netty.noUnsafe=false",
+        "-Dlog4j2.contextSelector=org.apache.logging.log4j.core.async.AsyncLoggerContextSelector",
     )
 }
 
 sourceSets {
-    create("example") {
-        compileClasspath += sourceSets.main.get().output
-        runtimeClasspath += sourceSets.main.get().output
+    create("example").also {
+        it.compileClasspath += sourceSets.main.get().output
+        it.runtimeClasspath += sourceSets.main.get().output
     }
 }
 

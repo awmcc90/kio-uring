@@ -1,7 +1,7 @@
 package benchmark
 
 import com.sun.nio.file.ExtendedOpenOption
-import io.kiouring.IoUringFile
+import io.kiouring.file.IoUringFileIoHandle
 import io.netty.channel.MultiThreadIoEventLoopGroup
 import io.netty.channel.uring.IoUringIoHandler
 import org.apache.logging.log4j.kotlin.Logging
@@ -10,7 +10,6 @@ import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.StandardOpenOption
-import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 
 @State(Scope.Thread)
@@ -32,12 +31,13 @@ import java.util.concurrent.TimeUnit
         "-Dio.netty.tryReflectionSetAccessible=true",
         "-Dio.netty.iouring.ringSize=4096",
         "-Dio.netty.noUnsafe=false",
+        "-Dlog4j2.contextSelector=org.apache.logging.log4j.core.async.AsyncLoggerContextSelector",
     ]
 )
 open class RandomWriteBenchmark : Logging {
 
     private lateinit var group: MultiThreadIoEventLoopGroup
-    private lateinit var ioUringFile: IoUringFile
+    private lateinit var ioUringFile: IoUringFileIoHandle
     private lateinit var channel: FileChannel
 
     @Setup(Level.Trial)
@@ -45,14 +45,14 @@ open class RandomWriteBenchmark : Logging {
         val path = Files.createTempFile("bench_write", ".dat")
             .apply { toFile().deleteOnExit() }
 
-        FileChannel.open(path, StandardOpenOption.WRITE).use { fc ->
-            fc.write(ByteBuffer.wrap(byteArrayOf(0)), 1024L * 1024L * 1024L - 1)
-            fc.force(true)
+        FileChannel.open(path, StandardOpenOption.WRITE).use { ch ->
+            ch.write(ByteBuffer.wrap(byteArrayOf(0)), 1024L * 1024L * 1024L - 1)
+            ch.force(true)
         }
 
         // io_uring
         group = MultiThreadIoEventLoopGroup(1, IoUringIoHandler.newFactory())
-        ioUringFile = IoUringFile.open(
+        ioUringFile = IoUringFileIoHandle.open(
             path,
             group.next(),
             StandardOpenOption.WRITE,
@@ -70,29 +70,28 @@ open class RandomWriteBenchmark : Logging {
 
     @Benchmark
     fun ioUring_random_write(state: RandomIoState.Write) {
-        val f = state.futures
-        val buf = state.buffers
-        val off = state.randomOffsets
+        val futures = state.futures
+        val buffers = state.buffers
+        val offsets = state.randomOffsets
 
         for (i in 0 until state.batchSize) {
-            f[i] = ioUringFile.writeAsync(buf[i], off[i])
+            futures[i] = ioUringFile.writeAsync(buffers[i].retain(), offsets[i])
         }
 
-        CompletableFuture.allOf(*f).join()
-
-        ioUringFile.fsync(true).join()
+        for (i in 0 until state.batchSize) {
+            futures[i]!!.join()
+            buffers[i].release()
+        }
     }
 
     @Benchmark
     fun fileChannel_random_write(state: RandomIoState.Write) {
-        val buf = state.nioBuffers
-        val off = state.randomOffsets
+        val buffers = state.nioBuffers
+        val offsets = state.randomOffsets
 
         for (i in 0 until state.batchSize) {
-            channel.write(buf[i], off[i])
+            channel.write(buffers[i], offsets[i])
         }
-
-        channel.force(false)
     }
 
     @TearDown(Level.Trial)

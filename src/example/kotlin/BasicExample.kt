@@ -1,6 +1,6 @@
 package example
 
-import io.kiouring.IoUringFile
+import io.kiouring.file.IoUringFile
 import io.netty.buffer.Unpooled
 import io.netty.channel.MultiThreadIoEventLoopGroup
 import io.netty.channel.uring.IoUringIoHandler
@@ -9,15 +9,8 @@ import java.nio.file.StandardOpenOption
 
 /**
  * Basic example demonstrating io_uring file I/O operations.
- *
- * This example shows how to:
- * 1. Create an io_uring event loop group
- * 2. Open a file with IoUringFile
- * 3. Perform async write, fsync, and read operations
- * 4. Clean up resources properly
  */
 fun main() {
-    // Create an io_uring backed event loop group with 1 thread
     val group = MultiThreadIoEventLoopGroup(1, IoUringIoHandler.newFactory())
     val eventLoop = group.next()
 
@@ -37,8 +30,7 @@ fun main() {
     val writeBuf = Unpooled.directBuffer(data.size).writeBytes(data)
     val readBuf = Unpooled.directBuffer(data.size)
 
-    f.writeAsync(writeBuf, 0).get()
-    f.fsync().get()
+    f.writeAsync(writeBuf, 0, true).get()
     f.readAsync(readBuf, 0).get()
 
     val out = ByteArray(data.size)

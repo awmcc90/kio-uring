@@ -1,5 +1,6 @@
 package benchmark
 
+import io.kiouring.file.SyscallFuture
 import io.kiouring.util.alignedByteBuf
 import io.netty.buffer.ByteBuf
 import org.openjdk.jmh.annotations.Level
@@ -9,7 +10,6 @@ import org.openjdk.jmh.annotations.Setup
 import org.openjdk.jmh.annotations.State
 import org.openjdk.jmh.annotations.TearDown
 import java.nio.ByteBuffer
-import java.util.concurrent.CompletableFuture
 
 @State(Scope.Thread)
 open class RandomIoState {
@@ -24,7 +24,7 @@ open class RandomIoState {
     lateinit var randomOffsets: LongArray
     lateinit var buffers: Array<ByteBuf>
     lateinit var nioBuffers: Array<ByteBuffer>
-    lateinit var futures: Array<CompletableFuture<Int>?>
+    lateinit var futures: Array<SyscallFuture?>
 
     @Setup(Level.Trial)
     fun setup() {

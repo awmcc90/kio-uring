@@ -1,7 +1,7 @@
 package benchmark
 
 import com.sun.nio.file.ExtendedOpenOption
-import io.kiouring.IoUringFile
+import io.kiouring.file.IoUringFileIoHandle
 import io.netty.channel.MultiThreadIoEventLoopGroup
 import io.netty.channel.uring.IoUringIoHandler
 import org.apache.logging.log4j.kotlin.Logging
@@ -10,7 +10,6 @@ import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.StandardOpenOption
-import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 
 @State(Scope.Thread)
@@ -32,12 +31,13 @@ import java.util.concurrent.TimeUnit
         "-Dio.netty.tryReflectionSetAccessible=true",
         "-Dio.netty.iouring.ringSize=4096",
         "-Dio.netty.noUnsafe=false",
+        "-Dlog4j2.contextSelector=org.apache.logging.log4j.core.async.AsyncLoggerContextSelector",
     ]
 )
 open class RandomReadBenchmark : Logging {
 
     private lateinit var group: MultiThreadIoEventLoopGroup
-    private lateinit var ioUringFile: IoUringFile
+    private lateinit var ioUringFile: IoUringFileIoHandle
     private lateinit var channel: FileChannel
 
     @Setup(Level.Trial)
@@ -45,22 +45,22 @@ open class RandomReadBenchmark : Logging {
         val path = Files.createTempFile("bench_read", ".dat")
             .apply { toFile().deleteOnExit() }
 
-        FileChannel.open(path, StandardOpenOption.WRITE).use { fc ->
+        FileChannel.open(path, StandardOpenOption.WRITE).use { ch ->
             val chunkBuf = ByteBuffer.allocateDirect(1024 * 1024) // 1MB
             while (chunkBuf.hasRemaining()) chunkBuf.put(0xFF.toByte())
 
             var written = 0L
             while (written < state.fileSize) {
                 chunkBuf.clear()
-                fc.write(chunkBuf, written)
+                ch.write(chunkBuf, written)
                 written += chunkBuf.capacity()
             }
-            fc.force(true)
+            ch.force(true)
         }
 
         // io_uring
         group = MultiThreadIoEventLoopGroup(1, IoUringIoHandler.newFactory())
-        ioUringFile = IoUringFile.open(
+        ioUringFile = IoUringFileIoHandle.open(
             path,
             group.next(),
             StandardOpenOption.READ,
@@ -77,24 +77,27 @@ open class RandomReadBenchmark : Logging {
 
     @Benchmark
     fun ioUring_random_read(state: RandomIoState.Read) {
-        val f = state.futures
-        val buf = state.buffers
-        val off = state.randomOffsets
+        val futures = state.futures
+        val buffers = state.buffers
+        val offsets = state.randomOffsets
 
         for (i in 0 until state.batchSize) {
-            f[i] = ioUringFile.readAsync(buf[i], off[i])
+            futures[i] = ioUringFile.readAsync(buffers[i].retain(), offsets[i])
         }
 
-        CompletableFuture.allOf(*f).join()
+        for (i in 0 until state.batchSize) {
+            futures[i]!!.join()
+            buffers[i].release()
+        }
     }
 
     @Benchmark
     fun fileChannel_random_read(state: RandomIoState.Read) {
-        val buf = state.nioBuffers
-        val off = state.randomOffsets
+        val nioBuffers = state.nioBuffers
+        val offsets = state.randomOffsets
 
         for (i in 0 until state.batchSize) {
-            channel.read(buf[i], off[i])
+            channel.read(nioBuffers[i], offsets[i])
         }
     }
 

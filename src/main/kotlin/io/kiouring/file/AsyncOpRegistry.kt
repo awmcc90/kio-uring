@@ -1,6 +1,7 @@
-package io.kiouring
+package io.kiouring.file
 
 import io.netty.channel.uring.IoUringIoEvent
+import org.apache.logging.log4j.kotlin.Logging
 
 class AsyncOpRegistry(private val maxInFlight: Int = 4096) : Iterable<AsyncOpContext> {
 
@@ -19,6 +20,10 @@ class AsyncOpRegistry(private val maxInFlight: Int = 4096) : Iterable<AsyncOpCon
             AsyncOpContext(id)
         }
     }
+
+    fun isEmpty(): Boolean = freeTop == maxInFlight - 1
+
+    fun isFull(): Boolean = freeTop < 0
 
     fun next(op: Byte): AsyncOpContext {
         check(freeTop >= 0) { "Registry full; too many in-flight ops" }
@@ -45,8 +50,28 @@ class AsyncOpRegistry(private val maxInFlight: Int = 4096) : Iterable<AsyncOpCon
         }
     }
 
-    fun isEmpty(): Boolean {
-        return freeTop == maxInFlight - 1
+    // Only release if it was actually in use to prevent double-free corruption
+    fun release(ctx: AsyncOpContext, cause: Throwable) {
+        if (ctx.inUse) {
+            ctx.inUse = false
+            ctx.future.fail(cause)
+            val index = ctx.id - Short.MIN_VALUE
+            freeIndices[++freeTop] = index
+        }
+    }
+
+    fun findStuckOps(timeoutNs: Long): List<AsyncOpContext> {
+        val now = System.nanoTime()
+        var stuck: ArrayList<AsyncOpContext>? = null
+
+        for (i in 0 until maxInFlight) {
+            val ctx = contextPool[i]
+            if (ctx.inUse && (now - ctx.startTime) > timeoutNs) {
+                if (stuck == null) stuck = ArrayList(4) // Start small
+                stuck.add(ctx)
+            }
+        }
+        return stuck ?: emptyList()
     }
 
     override fun iterator(): Iterator<AsyncOpContext> {
@@ -78,4 +103,6 @@ class AsyncOpRegistry(private val maxInFlight: Int = 4096) : Iterable<AsyncOpCon
             }
         }
     }
+
+    private companion object : Logging
 }

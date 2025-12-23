@@ -20,9 +20,8 @@ fun alignedByteBuf(size: Int): ByteBuf {
     raw.limit(offset + size)
     val alignedSlice = raw.slice()
 
-    while (alignedSlice.hasRemaining()) {
-        alignedSlice.put(1.toByte())
-    }
+    // Prefill
+    while (alignedSlice.hasRemaining()) alignedSlice.put(1.toByte())
     alignedSlice.clear()
 
     return Unpooled.wrappedBuffer(alignedSlice)
