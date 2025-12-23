@@ -46,6 +46,7 @@ class IoUringFileIoHandle(
     fun init(ioRegistration: IoRegistration): IoUringFileIoHandle {
         check(ioRegistration.isValid) { "IoRegistration is not valid" }
         this.ioRegistration = ioRegistration
+        this.state = State.INITIALIZED
         return this
     }
 
@@ -152,7 +153,6 @@ class IoUringFileIoHandle(
                 return@withEventLoop
             }
 
-            if (state == State.INITIALIZING) state = State.INITIALIZED
             state = State.OPENING
 
             val openFuture = submitOnLoop(opCode = NativeConstants.IoRingOp.OPENAT) { ctx ->
