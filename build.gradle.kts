@@ -23,7 +23,6 @@ dependencies {
     api("io.netty:netty-transport:4.2.9.Final")
     api("io.netty:netty-transport-native-io_uring:4.2.9.Final:linux-x86_64")
 
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
     implementation("org.apache.logging.log4j:log4j-api:2.25.3")
     implementation("org.apache.logging.log4j:log4j-api-kotlin:1.5.0")
 
@@ -69,7 +68,9 @@ tasks.register<JavaExec>("runExample") {
     group = "application"
     description = "Run the basic example"
     classpath = sourceSets["example"].runtimeClasspath
-    mainClass.set("example.BasicExampleKt")
+    mainClass.set("example.MainKt")
+
+    systemProperty("io.netty.iouring.ringSize", "32768")
 }
 
 publishing {

@@ -1,9 +1,9 @@
 package io.kiouring.file
 
+import io.kiouring.util.completeFrom
 import io.netty.buffer.ByteBuf
 import io.netty.channel.IoEventLoop
 import io.netty.channel.unix.IovArray
-import java.io.IOException
 import java.lang.AutoCloseable
 import java.nio.file.OpenOption
 import java.nio.file.Path
@@ -117,18 +117,16 @@ class IoUringFile private constructor(
     }
 
     // Delete = unlink() + close()
-    fun unlink(): CompletableFuture<Int> {
+    fun delete(): CompletableFuture<Int> {
         val promise = CompletableFuture<Int>()
 
         if (ioUringIoHandle.isAnonymous) {
-            promise.completeExceptionally(
-                IOException("Cannot delete anonymous file. Call close instead.")
-            )
+            promise.completeFrom(closeAsync())
         } else {
             ioUringIoHandle.unlinkAsync()
-                .onComplete { res, err ->
+                .onComplete { _, err ->
                     if (err != null) promise.completeExceptionally(err)
-                    else promise.complete(res)
+                    else promise.completeFrom(closeAsync())
                 }
         }
 
@@ -193,12 +191,12 @@ class IoUringFile private constructor(
         }
 
         @JvmStatic
-        fun openAnonymous(
+        fun createTempFile(
             ioEventLoop: IoEventLoop,
             openOptions: Array<out OpenOption> = emptyArray(),
             attrs: Array<out FileAttribute<*>> = emptyArray(),
         ): CompletableFuture<IoUringFile> {
-            return IoUringFileIoHandle.openAnonymous(ioEventLoop, openOptions, attrs)
+            return IoUringFileIoHandle.createTempFile(ioEventLoop, openOptions, attrs)
                 .thenApply {
                     IoUringFile(it)
                 }

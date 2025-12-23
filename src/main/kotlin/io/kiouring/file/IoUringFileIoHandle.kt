@@ -407,10 +407,10 @@ class IoUringFileIoHandle(
                         ioUringIoFileHandle
                             .init(it.get() as IoRegistration)
                             .open(pathCStr)
-                            .whenComplete { result, t ->
+                            .handle { res, err ->
                                 pathCStr.release()
-                                if (t != null) future.completeExceptionally(t)
-                                else future.complete(result)
+                                if (err != null) future.completeExceptionally(err)
+                                else future.complete(res)
                             }
                     } catch (t: Throwable) {
                         pathCStr.release()
@@ -438,8 +438,9 @@ class IoUringFileIoHandle(
             return open(path, ioEventLoop, flags, mode)
         }
 
+        // Creates an anonymous temp file
         @JvmStatic
-        fun openAnonymous(
+        fun createTempFile(
             ioEventLoop: IoEventLoop,
             options: Array<out OpenOption> = emptyArray(),
             attrs: Array<out FileAttribute<*>> = emptyArray(),

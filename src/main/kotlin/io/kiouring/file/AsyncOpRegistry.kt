@@ -1,9 +1,12 @@
 package io.kiouring.file
 
 import io.netty.channel.uring.IoUringIoEvent
+import io.netty.util.internal.SystemPropertyUtil
 import org.apache.logging.log4j.kotlin.Logging
 
-class AsyncOpRegistry(private val maxInFlight: Int = 4096) : Iterable<AsyncOpContext> {
+class AsyncOpRegistry(
+    private val maxInFlight: Int = SystemPropertyUtil.getInt("io.netty.iouring.ringSize", 4096) * 2,
+) : Iterable<AsyncOpContext> {
 
     private val contextPool: Array<AsyncOpContext>
     private val freeIndices: IntArray
@@ -13,7 +16,7 @@ class AsyncOpRegistry(private val maxInFlight: Int = 4096) : Iterable<AsyncOpCon
         require(maxInFlight <= 65536) { "Cannot exceed 64k slots due to Short ID mapping" }
 
         freeIndices = IntArray(maxInFlight) { it }
-        freeTop = maxInFlight - 1
+        freeTop = maxInFlight - 2 // -1 for 0 index, -1 for special id field
 
         contextPool = Array(maxInFlight) { index ->
             val id = (Short.MIN_VALUE + index).toShort()
@@ -21,7 +24,7 @@ class AsyncOpRegistry(private val maxInFlight: Int = 4096) : Iterable<AsyncOpCon
         }
     }
 
-    fun isEmpty(): Boolean = freeTop == maxInFlight - 1
+    fun isEmpty(): Boolean = freeTop == maxInFlight - 2
 
     fun isFull(): Boolean = freeTop < 0
 
@@ -43,8 +46,9 @@ class AsyncOpRegistry(private val maxInFlight: Int = 4096) : Iterable<AsyncOpCon
             val ctx = contextPool[index]
 
             if (ctx.inUse) {
-                ctx.future.complete(event.res())
                 ctx.inUse = false
+                ctx.uringId = -1
+                ctx.future.complete(event.res())
                 freeIndices[++freeTop] = index
             }
         }
@@ -54,6 +58,7 @@ class AsyncOpRegistry(private val maxInFlight: Int = 4096) : Iterable<AsyncOpCon
     fun release(ctx: AsyncOpContext, cause: Throwable) {
         if (ctx.inUse) {
             ctx.inUse = false
+            ctx.uringId = -1
             ctx.future.fail(cause)
             val index = ctx.id - Short.MIN_VALUE
             freeIndices[++freeTop] = index
