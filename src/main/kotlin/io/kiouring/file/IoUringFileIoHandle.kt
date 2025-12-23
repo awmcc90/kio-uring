@@ -17,6 +17,7 @@ import java.nio.file.attribute.FileAttribute
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.io.path.isDirectory
 import kotlin.properties.Delegates
 import org.apache.logging.log4j.kotlin.Logging
@@ -28,10 +29,13 @@ class IoUringFileIoHandle(
     private val mode: Int
 ) : IoUringIoHandle {
 
-    private var state: State = State.INITIALIZING
-    private var closeSubmitted: Boolean = false
-    private var openFuture: UncancellableFuture<IoUringFileIoHandle>? = null
     private val contextRegistry = AsyncOpRegistry()
+
+    private var state: State = State.INITIALIZING
+
+    private var closeSubmitted: Boolean = false
+    private val closeFuture: AtomicReference<UncancellableFuture<Int>?> = AtomicReference(null)
+    private var openFuture: UncancellableFuture<IoUringFileIoHandle>? = null
 
     private lateinit var ioRegistration: IoRegistration
     private var fd by Delegates.notNull<Int>()
@@ -295,33 +299,79 @@ class IoUringFileIoHandle(
     }
 
     private fun submitCloseIfReady() {
-        if (closeSubmitted || !contextRegistry.isEmpty() || state != State.CLOSING) return
-        closeSubmitted = true
+        if (state != State.CLOSING || !contextRegistry.isEmpty() || closeSubmitted) return
 
         val ops = IoUringIoOps(
             NativeConstants.IoRingOp.CLOSE, 0, 0, fd,
             0L, 0L, 0, 0,
-            0, 0, 0, 0, 0L,
+            Short.MAX_VALUE, 0, 0, 0, 0L,
         )
 
         try {
             val uringId = ioRegistration.submit(ops)
             if (uringId == -1L) throw IOException("Failed to submit close")
+            closeSubmitted = true
         } catch (t: Throwable) {
-            logger.error("Failed to submit close operation", t)
-            // Fall through to force CLOSED state and registration cancellation
+            closeFuture.get()?.completeExceptionally(t)
+            state = State.CLOSED
         }
 
-        state = State.CLOSED
-
-        // Safe to cancel after we submit close
         ioRegistration.cancel()
     }
 
     override fun handle(ioRegistration: IoRegistration, ioEvent: IoEvent) {
         val event = ioEvent as IoUringIoEvent
+
+        if (event.data() == Short.MAX_VALUE && event.opcode() == NativeConstants.IoRingOp.CLOSE) {
+            val res = event.res()
+            val f = closeFuture.get() ?: run {
+                logger.error {
+                    "Received close event completion but close future isn't set. This should not happen."
+                }
+                return
+            }
+
+            if (res < 0) f.completeExceptionally(IOException("Close failed: $res"))
+            else f.complete(res)
+
+            return
+        }
+
         contextRegistry.complete(event)
         submitCloseIfReady()
+    }
+
+    fun closeAsync(): CompletableFuture<Int> {
+        closeFuture.get()?.let { return it }
+
+        val promise = UncancellableFuture<Int>()
+        if (closeFuture.compareAndSet(null, promise)) {
+            withEventLoop {
+                stuckOpsCleanerTask?.cancel(false)
+                stuckOpsCleanerTask = null
+
+                if (state != State.CLOSING && state != State.CLOSED) {
+                    state = State.CLOSING
+                    if (this::ioRegistration.isInitialized && ioRegistration.isValid) {
+                        submitCancelAll()
+                        submitCloseIfReady()
+                    } else {
+                        state = State.CLOSED
+                        promise.complete(0)
+                    }
+                } else {
+                    promise.complete(0)
+                }
+            }
+            return promise
+        }
+
+        return closeFuture.get()!!
+    }
+
+    @Throws(Exception::class)
+    override fun close() {
+        closeAsync()
     }
 
     private enum class State {
@@ -331,27 +381,6 @@ class IoUringFileIoHandle(
         OPEN,
         CLOSING,
         CLOSED,
-    }
-
-    @Throws(Exception::class)
-    override fun close() {
-        withEventLoop {
-            stuckOpsCleanerTask?.cancel(false)
-            stuckOpsCleanerTask = null
-
-            when (state) {
-                State.CLOSING, State.CLOSED -> return@withEventLoop
-                else -> {
-                    state = State.CLOSING
-                    if (this::ioRegistration.isInitialized && ioRegistration.isValid) {
-                        submitCancelAll()
-                        submitCloseIfReady()
-                    } else {
-                        state = State.CLOSED
-                    }
-                }
-            }
-        }
     }
 
     companion object : Logging {

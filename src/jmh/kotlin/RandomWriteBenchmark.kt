@@ -105,8 +105,8 @@ open class RandomWriteBenchmark : Logging {
             logger.error("Final sync failed", e)
         } finally {
             channel.close()
-            ioUringFile.close()
-            group.shutdownGracefully().syncUninterruptibly()
+            ioUringFile.closeAsync().get()
+            group.shutdownGracefully().syncUninterruptibly().get()
         }
     }
 }

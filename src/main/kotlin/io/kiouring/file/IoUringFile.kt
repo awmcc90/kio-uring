@@ -107,7 +107,7 @@ class IoUringFile private constructor(
     }
 
     fun fsync(isSyncData: Boolean = false, len: Int = 0, offset: Long = 0): CompletableFuture<Int> {
-        val promise = UncancellableFuture<Int>()
+        val promise = CompletableFuture<Int>()
         ioUringIoHandle.fsyncAsync(isSyncData, len, offset)
             .onComplete { res, err ->
                 if (err != null) promise.completeExceptionally(err)
@@ -118,7 +118,7 @@ class IoUringFile private constructor(
 
     // Delete = unlink() + close()
     fun unlink(): CompletableFuture<Int> {
-        val promise = UncancellableFuture<Int>()
+        val promise = CompletableFuture<Int>()
 
         if (ioUringIoHandle.isAnonymous) {
             promise.completeExceptionally(
@@ -169,6 +169,8 @@ class IoUringFile private constructor(
             remaining -= progress
         }
     }
+
+    fun closeAsync(): CompletableFuture<Int> = ioUringIoHandle.closeAsync()
 
     @Throws(Exception::class)
     override fun close() {

@@ -50,7 +50,7 @@ fun main(): Unit = runBlocking {
     writeBuf.release()
 
     f.unlink().await()
-    f.close()
+    f.closeAsync().await()
 
     group.shutdownGracefully().get()
 }

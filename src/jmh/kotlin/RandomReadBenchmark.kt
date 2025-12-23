@@ -107,7 +107,7 @@ open class RandomReadBenchmark : Logging {
     @TearDown(Level.Trial)
     fun teardown() {
         channel.close()
-        ioUringFile.close()
-        group.shutdownGracefully().syncUninterruptibly()
+        ioUringFile.closeAsync().get()
+        group.shutdownGracefully().syncUninterruptibly().get()
     }
 }
