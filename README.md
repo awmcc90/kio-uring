@@ -7,13 +7,13 @@ HP SSD EX920 1TB
 ### Summary
 
 | Benchmark | Implementation | IOPS | Throughput | GC Alloc / Op |
-| :--- | :--- | :--- | :--- | :--- |
-| **Random Read** | `fio` (Native Baseline) | ~311,144 | 1,274 MB/s | N/A |
-| **Random Read** | `FileChannel` (Java) | 64,738 | 252.9 MB/s | **~6 B** |
-| **Random Read** | `io_uring` (Kotlin) | **312,840** | **1,222.0 MB/s** | 92.8 KB |
-| **Random Write** | `fio` (Native Baseline) | ~279,693 | 1,145 MB/s | N/A |
-| **Random Write** | `FileChannel` (Java) | 209,723 | 819.2 MB/s | **~2 B** |
-| **Random Write** | `io_uring` (Kotlin) | **276,702** | **1,080.9 MB/s** | 89.6 KB |
+| :--- | :--- | :--- | :--- |:----------|
+| **Random Read** | `fio` (Native Baseline) | ~311,144 | 1,274 MB/s | N/A       |
+| **Random Read** | `FileChannel` (Java) | 64,738 | 252.9 MB/s | **~6 B**  |
+| **Random Read** | `io_uring` (Kotlin) | **312,840** | **1,222.0 MB/s** | ~93 B     |
+| **Random Write** | `fio` (Native Baseline) | ~279,693 | 1,145 MB/s | N/A       |
+| **Random Write** | `FileChannel` (Java) | 209,723 | 819.2 MB/s | **~2 B**  |
+| **Random Write** | `io_uring` (Kotlin) | **276,702** | **1,080.9 MB/s** | ~90 B     |
 
 ### fio
 
@@ -137,6 +137,8 @@ Disk stats (read/write):
 
 ### JMH
 
+***Note***: *Each op is a batch of 1024 individual writes or reads of 4096 bytes each. Multiplying score by 1024 gives IOPS and multiplying IOPS by 4096 gives bytes / second. Conversely, diving normalized gc rate by 1024 gives bytes per op.*
+
 ```
 Benchmark                                                          (batchSize)  (bufferSize)   Mode  Cnt      Score       Error   Units
 RandomReadBenchmark.fileChannel_random_read                               1024          4096  thrpt    5     63.221 ±     1.091   ops/s
@@ -158,4 +160,3 @@ RandomWriteBenchmark.ioUring_random_write:·gc.alloc.rate.norm             1024 
 RandomWriteBenchmark.ioUring_random_write:·gc.count                       1024          4096  thrpt    5      2.000              counts
 RandomWriteBenchmark.ioUring_random_write:·gc.time                        1024          4096  thrpt    5      6.000                  ms
 ```
-
