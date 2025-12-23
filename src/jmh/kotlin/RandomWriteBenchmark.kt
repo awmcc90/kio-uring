@@ -9,6 +9,7 @@ import org.openjdk.jmh.annotations.*
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.nio.file.Files
+import java.nio.file.OpenOption
 import java.nio.file.StandardOpenOption
 import java.util.concurrent.TimeUnit
 
@@ -55,9 +56,11 @@ open class RandomWriteBenchmark : Logging {
         ioUringFile = IoUringFileIoHandle.open(
             path,
             group.next(),
-            StandardOpenOption.WRITE,
-            StandardOpenOption.CREATE,
-            ExtendedOpenOption.DIRECT,
+            options = arrayOf<OpenOption>(
+                StandardOpenOption.WRITE,
+                StandardOpenOption.CREATE,
+                ExtendedOpenOption.DIRECT,
+            )
         ).get()
 
         // Java nio baseline

@@ -9,6 +9,7 @@ import org.openjdk.jmh.annotations.*
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.nio.file.Files
+import java.nio.file.OpenOption
 import java.nio.file.StandardOpenOption
 import java.util.concurrent.TimeUnit
 
@@ -61,10 +62,12 @@ open class RandomReadBenchmark : Logging {
         // io_uring
         group = MultiThreadIoEventLoopGroup(1, IoUringIoHandler.newFactory())
         ioUringFile = IoUringFileIoHandle.open(
-            path,
-            group.next(),
-            StandardOpenOption.READ,
-            ExtendedOpenOption.DIRECT,
+            path = path,
+            ioEventLoop = group.next(),
+            options = arrayOf<OpenOption>(
+                StandardOpenOption.READ,
+                ExtendedOpenOption.DIRECT,
+            )
         ).get()
 
         // Java nio baseline

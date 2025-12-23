@@ -3,9 +3,11 @@ package io.kiouring.file
 import io.netty.buffer.ByteBuf
 import io.netty.channel.IoEventLoop
 import io.netty.channel.unix.IovArray
+import java.io.IOException
 import java.lang.AutoCloseable
 import java.nio.file.OpenOption
 import java.nio.file.Path
+import java.nio.file.attribute.FileAttribute
 import java.util.concurrent.CompletableFuture
 
 class IoUringFile private constructor(
@@ -108,12 +110,28 @@ class IoUringFile private constructor(
         val promise = UncancellableFuture<Int>()
         ioUringIoHandle.fsyncAsync(isSyncData, len, offset)
             .onComplete { res, err ->
-                if (err != null) {
-                    promise.completeExceptionally(err)
-                } else {
-                    promise.complete(res)
-                }
+                if (err != null) promise.completeExceptionally(err)
+                else promise.complete(res)
             }
+        return promise
+    }
+
+    // Delete = unlink() + close()
+    fun unlink(): CompletableFuture<Int> {
+        val promise = UncancellableFuture<Int>()
+
+        if (ioUringIoHandle.isAnonymous) {
+            promise.completeExceptionally(
+                IOException("Cannot delete anonymous file. Call close instead.")
+            )
+        } else {
+            ioUringIoHandle.unlinkAsync()
+                .onComplete { res, err ->
+                    if (err != null) promise.completeExceptionally(err)
+                    else promise.complete(res)
+                }
+        }
+
         return promise
     }
 
@@ -160,8 +178,25 @@ class IoUringFile private constructor(
     companion object {
 
         @JvmStatic
-        fun open(path: Path, ioEventLoop: IoEventLoop, vararg options: OpenOption): CompletableFuture<IoUringFile> {
-            return IoUringFileIoHandle.open(path, ioEventLoop, *options)
+        fun open(
+            path: Path,
+            ioEventLoop: IoEventLoop,
+            openOptions: Array<out OpenOption>,
+            attrs: Array<out FileAttribute<*>> = emptyArray(),
+        ): CompletableFuture<IoUringFile> {
+            return IoUringFileIoHandle.open(path, ioEventLoop, openOptions, attrs)
+                .thenApply {
+                    IoUringFile(it)
+                }
+        }
+
+        @JvmStatic
+        fun openAnonymous(
+            ioEventLoop: IoEventLoop,
+            openOptions: Array<out OpenOption> = emptyArray(),
+            attrs: Array<out FileAttribute<*>> = emptyArray(),
+        ): CompletableFuture<IoUringFile> {
+            return IoUringFileIoHandle.openAnonymous(ioEventLoop, openOptions, attrs)
                 .thenApply {
                     IoUringFile(it)
                 }

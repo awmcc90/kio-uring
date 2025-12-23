@@ -67,7 +67,7 @@ class AsyncOpRegistry(private val maxInFlight: Int = 4096) : Iterable<AsyncOpCon
         for (i in 0 until maxInFlight) {
             val ctx = contextPool[i]
             if (ctx.inUse && (now - ctx.startTime) > timeoutNs) {
-                if (stuck == null) stuck = ArrayList(4) // Start small
+                if (stuck == null) stuck = ArrayList(4)
                 stuck.add(ctx)
             }
         }

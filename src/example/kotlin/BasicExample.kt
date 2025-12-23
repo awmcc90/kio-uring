@@ -4,34 +4,40 @@ import io.kiouring.file.IoUringFile
 import io.netty.buffer.Unpooled
 import io.netty.channel.MultiThreadIoEventLoopGroup
 import io.netty.channel.uring.IoUringIoHandler
-import java.nio.file.Files
+import java.nio.file.Paths
 import java.nio.file.StandardOpenOption
+import java.util.UUID
+import kotlinx.coroutines.future.await
+import kotlinx.coroutines.runBlocking
 
 /**
  * Basic example demonstrating io_uring file I/O operations.
  */
-fun main() {
+fun main(): Unit = runBlocking {
     val group = MultiThreadIoEventLoopGroup(1, IoUringIoHandler.newFactory())
-    val eventLoop = group.next()
+    val ioEventLoop = group.next()
 
-    val file = Files.createTempFile("uring", ".dat")
-        .apply { toFile().deleteOnExit() }
-    val data = "hello-io-uring".toByteArray()
+    val tempDir = Paths.get(System.getProperty("java.io.tmpdir"))
+    val fileName = "uring-${UUID.randomUUID()}.dat"
+    val path = tempDir.resolve(fileName)
 
     val f = IoUringFile.open(
-        file,
-        eventLoop,
-        StandardOpenOption.READ,
-        StandardOpenOption.WRITE,
-        StandardOpenOption.CREATE,
-        StandardOpenOption.TRUNCATE_EXISTING
-    ).get()
+        path = path,
+        ioEventLoop = ioEventLoop,
+        openOptions = arrayOf(
+            StandardOpenOption.READ,
+            StandardOpenOption.WRITE,
+            StandardOpenOption.CREATE,
+            StandardOpenOption.TRUNCATE_EXISTING,
+        ),
+    ).await()
 
+    val data = "hello-io-uring".toByteArray()
     val writeBuf = Unpooled.directBuffer(data.size).writeBytes(data)
     val readBuf = Unpooled.directBuffer(data.size)
 
-    f.writeAsync(writeBuf, 0, true).get()
-    f.readAsync(readBuf, 0).get()
+    f.writeAsync(writeBuf, 0, true).await()
+    f.readAsync(readBuf, 0).await()
 
     val out = ByteArray(data.size)
     readBuf.readBytes(out)
@@ -41,6 +47,10 @@ fun main() {
     println("Read:    ${out.toString(Charsets.UTF_8)}")
 
     readBuf.release()
+    writeBuf.release()
+
+    f.unlink().await()
     f.close()
-    group.shutdownGracefully()
+
+    group.shutdownGracefully().get()
 }

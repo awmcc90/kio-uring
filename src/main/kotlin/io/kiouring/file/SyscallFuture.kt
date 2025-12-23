@@ -14,7 +14,7 @@ class SyscallFuture {
     private var exception: Throwable? = null
 
     // NOTE: The order of the resets matters
-    fun reset(op: Byte) {
+    internal fun reset(op: Byte) {
         this.op = op
         this.result = 0
         this.exception = null
@@ -23,7 +23,7 @@ class SyscallFuture {
         this.done = false
     }
 
-    fun onComplete(handler: (Int, Throwable?) -> Unit) {
+    internal fun onComplete(handler: (Int, Throwable?) -> Unit) {
         if (this.done) {
             handler(this.result, this.exception)
         } else {
@@ -34,7 +34,7 @@ class SyscallFuture {
         }
     }
 
-    fun complete(res: Int) {
+    internal fun complete(res: Int) {
         check(!done) { "Future is already completed" }
 
         this.result = res
@@ -44,7 +44,7 @@ class SyscallFuture {
         finish()
     }
 
-    fun fail(cause: Throwable) {
+    internal fun fail(cause: Throwable) {
         check(!done) { "Future is already completed" }
 
         this.exception = cause
@@ -64,7 +64,7 @@ class SyscallFuture {
         if (w != null) LockSupport.unpark(w)
     }
 
-    fun join(): Int {
+    internal fun join(): Int {
         if (this.done) return report()
         this.waiter = Thread.currentThread()
         while (!this.done) LockSupport.park(this)

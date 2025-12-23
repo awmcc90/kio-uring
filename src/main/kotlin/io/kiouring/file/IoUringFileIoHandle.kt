@@ -12,16 +12,20 @@ import io.netty.util.concurrent.ScheduledFuture
 import java.io.IOException
 import java.nio.file.OpenOption
 import java.nio.file.Path
+import java.nio.file.Paths
+import java.nio.file.attribute.FileAttribute
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
-import kotlin.io.path.exists
 import kotlin.io.path.isDirectory
 import kotlin.properties.Delegates
 import org.apache.logging.log4j.kotlin.Logging
 
 class IoUringFileIoHandle(
+    val path: Path,
     private val ioEventLoop: IoEventLoop,
+    private val flags: Int,
+    private val mode: Int
 ) : IoUringIoHandle {
 
     private var state: State = State.INITIALIZING
@@ -31,6 +35,9 @@ class IoUringFileIoHandle(
 
     private lateinit var ioRegistration: IoRegistration
     private var fd by Delegates.notNull<Int>()
+
+    val isAnonymous: Boolean = (flags and NativeConstants.OpenFlags.TMPFILE) == NativeConstants.OpenFlags.TMPFILE
+    val isDirectory: Boolean = !isAnonymous && ((flags and NativeConstants.OpenFlags.DIRECTORY) == NativeConstants.OpenFlags.DIRECTORY)
 
     private var stuckOpsCleanerTask: ScheduledFuture<*>? = null
 
@@ -104,6 +111,7 @@ class IoUringFileIoHandle(
         return ctx.future
     }
 
+    // NOTE: This should never throw and if it does that's a bug
     private inline fun submitOnLoop(
         opCode: Byte,
         crossinline opFactory: (ctx: AsyncOpContext) -> IoUringIoOps,
@@ -115,6 +123,13 @@ class IoUringFileIoHandle(
                 }
             }
 
+            if (contextRegistry.isFull()) {
+                return SyscallFuture().apply {
+                    fail(IllegalStateException("Context registry is full"))
+                }
+            }
+
+            // We know this can't throw due to the isFull check
             val ctx = contextRegistry.next(opCode)
             return internalSubmit(ctx, opFactory)
         }
@@ -141,41 +156,41 @@ class IoUringFileIoHandle(
         return proxy
     }
 
-    private fun open(pathCStr: ByteBuf, flags: Int): UncancellableFuture<IoUringFileIoHandle> {
+    private fun open(pathCStr: ByteBuf): UncancellableFuture<IoUringFileIoHandle> {
         openFuture?.let { return it }
 
-        val f = UncancellableFuture<IoUringFileIoHandle>()
-        openFuture = f
+        val proxy = UncancellableFuture<IoUringFileIoHandle>()
+        openFuture = proxy
 
         withEventLoop {
             if (isClosed()) {
-                f.completeExceptionally(IOException("IoUringFileIoHandle is $state (op=open)"))
+                proxy.completeExceptionally(IOException("IoUringFileIoHandle is $state (op=open)"))
                 return@withEventLoop
             }
 
             state = State.OPENING
 
-            val openFuture = submitOnLoop(opCode = NativeConstants.IoRingOp.OPENAT) { ctx ->
+            val f = submitOnLoop(opCode = NativeConstants.IoRingOp.OPENAT) { ctx ->
                 IoUringIoOps(
                     ctx.op, 0, 0, -1,
-                    0L, pathCStr.memoryAddress(), 0, flags,
+                    0L, pathCStr.memoryAddress(), mode, flags,
                     ctx.id, 0, 0, 0, 0L
                 )
             }
 
-            openFuture.onComplete { res, err ->
+            f.onComplete { res, err ->
                 if (err != null) {
                     state = State.INITIALIZED
-                    f.completeExceptionally(err)
+                    proxy.completeExceptionally(err)
                 } else {
                     fd = res
                     state = State.OPEN
-                    f.complete(this)
+                    proxy.complete(this)
                 }
             }
         }
 
-        return f
+        return proxy
     }
 
     fun writeAsync(buffer: ByteBuf, offset: Long, dsync: Boolean = false): SyscallFuture =
@@ -225,13 +240,32 @@ class IoUringFileIoHandle(
             )
         }
 
+    fun unlinkAsync(): SyscallFuture {
+        val proxy = SyscallFuture()
+        val pathCStr = OpenHelpers.cStr(path)
+        val f = submitOnLoop(opCode = NativeConstants.IoRingOp.UNLINKAT) { ctx ->
+            IoUringIoOps(
+                ctx.op, 0, 0, -1,
+                0L, pathCStr.memoryAddress(), 0,
+                if (isDirectory) NativeConstants.AtFlags.AT_REMOVEDIR else 0,
+                ctx.id, 0, 0, 0, 0L
+            )
+        }
+        f.onComplete { res, err ->
+            pathCStr.release()
+            if (err != null) proxy.fail(err)
+            else proxy.complete(res)
+        }
+        return proxy
+    }
+
     private fun submitCancel(uringId: Long) {
         if (contextRegistry.isFull()) {
             logger.warn { "Registry full; cannot submit cancellation for $uringId" }
             return
         }
 
-        submitOnLoop(NativeConstants.IoRingOp.ASYNC_CANCEL) { ctx ->
+        submitOnLoop(opCode = NativeConstants.IoRingOp.ASYNC_CANCEL) { ctx ->
             IoUringIoOps(
                 ctx.op, 0, 0, -1,
                 0L, uringId, 0, 0,
@@ -250,7 +284,7 @@ class IoUringFileIoHandle(
             return
         }
 
-        submitOnLoop(NativeConstants.IoRingOp.ASYNC_CANCEL) { ctx ->
+        submitOnLoop(opCode = NativeConstants.IoRingOp.ASYNC_CANCEL) { ctx ->
             IoUringIoOps(
                 ctx.op, 0, 0, fd,
                 0L, 0L, 0,
@@ -271,10 +305,11 @@ class IoUringFileIoHandle(
         )
 
         try {
-            ioRegistration.submit(ops)
+            val uringId = ioRegistration.submit(ops)
+            if (uringId == -1L) throw IOException("Failed to submit close")
         } catch (t: Throwable) {
             logger.error("Failed to submit close operation", t)
-            // Allow past this to force CLOSED state and registration cancellation
+            // Fall through to force CLOSED state and registration cancellation
         }
 
         state = State.CLOSED
@@ -285,10 +320,7 @@ class IoUringFileIoHandle(
 
     override fun handle(ioRegistration: IoRegistration, ioEvent: IoEvent) {
         val event = ioEvent as IoUringIoEvent
-
         contextRegistry.complete(event)
-
-        // Check closing state
         submitCloseIfReady()
     }
 
@@ -325,16 +357,14 @@ class IoUringFileIoHandle(
     companion object : Logging {
         private const val OP_TIMEOUT_NS = 30_000_000_000L
 
-        @JvmStatic
-        fun open(path: Path, ioEventLoop: IoEventLoop, vararg options: OpenOption): CompletableFuture<IoUringFileIoHandle> {
-            require(!path.isDirectory()) { "file is directory" }
-            require(path.exists()) { "file is not exists" }
-            require(ioEventLoop.isCompatible(IoUringIoHandle::class.java)) {
-                "ioEventLoop is not compatible with IoUringIoHandle"
-            }
-
+        private fun open(
+            path: Path,
+            ioEventLoop: IoEventLoop,
+            flags: Int,
+            mode: Int,
+        ): CompletableFuture<IoUringFileIoHandle> {
             val future = UncancellableFuture<IoUringFileIoHandle>()
-            val ioUringIoFileHandle = IoUringFileIoHandle(ioEventLoop)
+            val ioUringIoFileHandle = IoUringFileIoHandle(path, ioEventLoop,flags, mode)
             ioEventLoop
                 .register(ioUringIoFileHandle)
                 .addListener {
@@ -344,21 +374,68 @@ class IoUringFileIoHandle(
                     }
 
                     val pathCStr = OpenHelpers.cStr(path)
-                    ioUringIoFileHandle
-                        .init(it.get() as IoRegistration)
-                        .open(pathCStr, OpenHelpers.openFlags(options))
-                        .whenComplete { result: IoUringFileIoHandle, t: Throwable? ->
-                            pathCStr.release()
-
-                            if (t != null) {
-                                future.completeExceptionally(t)
-                                return@whenComplete
+                    try {
+                        ioUringIoFileHandle
+                            .init(it.get() as IoRegistration)
+                            .open(pathCStr)
+                            .whenComplete { result, t ->
+                                pathCStr.release()
+                                if (t != null) future.completeExceptionally(t)
+                                else future.complete(result)
                             }
-
-                            future.complete(result)
-                        }
+                    } catch (t: Throwable) {
+                        pathCStr.release()
+                        future.completeExceptionally(t)
+                    }
                 }
             return future
+        }
+
+        @JvmStatic
+        fun open(
+            path: Path,
+            ioEventLoop: IoEventLoop,
+            options: Array<out OpenOption>,
+            attrs: Array<out FileAttribute<*>> = emptyArray(),
+        ): CompletableFuture<IoUringFileIoHandle> {
+            require(!path.isDirectory()) { "file is directory" }
+            require(ioEventLoop.isCompatible(IoUringIoHandle::class.java)) {
+                "ioEventLoop is not compatible with IoUringIoHandle"
+            }
+
+            val flags = OpenHelpers.openFlags(options)
+            val mode = OpenHelpers.fileMode(attrs)
+
+            return open(path, ioEventLoop, flags, mode)
+        }
+
+        @JvmStatic
+        fun openAnonymous(
+            ioEventLoop: IoEventLoop,
+            options: Array<out OpenOption> = emptyArray(),
+            attrs: Array<out FileAttribute<*>> = emptyArray(),
+        ): CompletableFuture<IoUringFileIoHandle> {
+            require(ioEventLoop.isCompatible(IoUringIoHandle::class.java)) {
+                "ioEventLoop is not compatible with IoUringIoHandle"
+            }
+
+            val tmpDir = Paths.get(System.getProperty("java.io.tmpdir"))
+            val userFlags = OpenHelpers.openFlags(options)
+
+            // Enforce mandatory flags (must have O_TMPFILE)
+            val hasWrite = (userFlags and NativeConstants.OpenFlags.WRONLY != 0) ||
+                    (userFlags and NativeConstants.OpenFlags.RDWR != 0)
+
+            val mandatoryAccess = if (hasWrite) 0 else NativeConstants.OpenFlags.RDWR
+
+            val finalFlags = userFlags or NativeConstants.OpenFlags.TMPFILE or mandatoryAccess
+
+            var mode = OpenHelpers.fileMode(attrs)
+            if (mode == NativeConstants.FileMode.DEFAULT_FILE && attrs.isEmpty()) {
+                mode = NativeConstants.FileMode.S_IRUSR or NativeConstants.FileMode.S_IWUSR
+            }
+
+            return open(tmpDir, ioEventLoop, finalFlags, mode)
         }
     }
 }

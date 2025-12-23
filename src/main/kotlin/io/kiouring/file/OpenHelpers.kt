@@ -7,6 +7,8 @@ import java.nio.file.LinkOption
 import java.nio.file.OpenOption
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.FileAttribute
+import java.nio.file.attribute.PosixFilePermission
 import kotlin.io.path.absolutePathString
 
 object OpenHelpers {
@@ -49,5 +51,33 @@ object OpenHelpers {
             else NativeConstants.OpenFlags.RDONLY
 
         return flags or access
+    }
+
+    fun fileMode(attributes: Array<out FileAttribute<*>>): Int {
+        var mode = NativeConstants.FileMode.DEFAULT_FILE
+
+        for (attr in attributes) {
+            if (attr.name() == "posix:permissions") {
+                @Suppress("UNCHECKED_CAST")
+                val permissions = attr.value() as? Set<PosixFilePermission> ?: continue
+
+                mode = permissions.fold(0) { acc, p ->
+                    acc or when (p) {
+                        PosixFilePermission.OWNER_READ     -> NativeConstants.FileMode.S_IRUSR
+                        PosixFilePermission.OWNER_WRITE    -> NativeConstants.FileMode.S_IWUSR
+                        PosixFilePermission.OWNER_EXECUTE  -> NativeConstants.FileMode.S_IXUSR
+
+                        PosixFilePermission.GROUP_READ     -> NativeConstants.FileMode.S_IRGRP
+                        PosixFilePermission.GROUP_WRITE    -> NativeConstants.FileMode.S_IWGRP
+                        PosixFilePermission.GROUP_EXECUTE  -> NativeConstants.FileMode.S_IXGRP
+
+                        PosixFilePermission.OTHERS_READ    -> NativeConstants.FileMode.S_IROTH
+                        PosixFilePermission.OTHERS_WRITE   -> NativeConstants.FileMode.S_IWOTH
+                        PosixFilePermission.OTHERS_EXECUTE -> NativeConstants.FileMode.S_IXOTH
+                    }
+                }
+            }
+        }
+        return mode
     }
 }
