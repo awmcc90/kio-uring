@@ -1,14 +1,25 @@
-## fio baseline
+## Benchmark
 
 ### Hardware
 
 HP SSD EX920 1TB
 
-### Random Read, 4K block, 30s test, Direct I/O, Queue Depth 64, 4 threads
+### Summary
 
-This test fully saturates the disk used for testing.
+| Benchmark | Implementation | IOPS | Throughput | GC Alloc / Op |
+| :--- | :--- | :--- | :--- | :--- |
+| **Random Read** | `fio` (Native Baseline) | ~311,144 | 1,274 MB/s | N/A |
+| **Random Read** | `FileChannel` (Java) | 64,738 | 252.9 MB/s | **~6 B** |
+| **Random Read** | `io_uring` (Kotlin) | **312,840** | **1,222.0 MB/s** | 92.8 KB |
+| **Random Write** | `fio` (Native Baseline) | ~279,693 | 1,145 MB/s | N/A |
+| **Random Write** | `FileChannel` (Java) | 209,723 | 819.2 MB/s | **~2 B** |
+| **Random Write** | `io_uring` (Kotlin) | **276,702** | **1,080.9 MB/s** | 89.6 KB |
 
-#### Run
+### fio
+
+#### Read
+
+Random Read, 4K block, 30s test, Direct I/O, Queue Depth 64, 4 threads
 
 ```bash
 
@@ -26,7 +37,8 @@ fio \
   --time_based
 ```
 
-#### Result
+**Result**
+
 ```bash
 fio-3.36
 Starting 4 processes
@@ -64,9 +76,9 @@ Disk stats (read/write):
   nvme0n1: ios=9320707/668, sectors=74565656/121216, merge=0/121, ticks=7416041/526, in_queue=7416584, util=67.58%
 ```
 
-### Random Write, 4K block, 30s test, Direct I/O, Queue Depth 64, 4 threads
+#### Write
 
-#### Run
+Random Write, 4K block, 30s test, Direct I/O, Queue Depth 64, 4 threads
 
 ```bash
 fio \
@@ -83,7 +95,7 @@ fio \
   --time_based
 ```
 
-#### Result
+**Result**
 
 ```bash
 fio-3.36
@@ -147,9 +159,3 @@ RandomWriteBenchmark.ioUring_random_write:·gc.count                       1024 
 RandomWriteBenchmark.ioUring_random_write:·gc.time                        1024          4096  thrpt    5      6.000                  ms
 ```
 
-At 1024 batch size and 4096 buffer size in the benchmarks:
-
-Random Read:
-
-kio-uring: 305 * 1024 = 312320 IOPS & 305 * 1024 * 406 = 1220 MB/s
-file channel: 64k * 1024 = 312320 IOPS & 63 * 1024 * 406 = 252 MB/s
